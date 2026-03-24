@@ -1,0 +1,49 @@
+rtspAddress: :8554
+protocols: [tcp]
+paths:
+  all:
+    source: publisher
+    sourceOnDemand: yes
+    sourceAnyPortEnable: yes
+    sourceFingerprint: ""
+    runOnInit: ""
+    runOnInitRestart: no
+    runOnDemand: ""
+    runOnDemandRestart: no
+    runOnDemandStartTimeout: 10s
+    runOnDemandCloseAfter: 0s
+    fallback: ""
+    
+    # 关键：缓冲区设置
+    readBufferCount: 64      # 从256减少到64
+    writeBufferCount: 64     # 从256减少到64
+    
+    # 低延迟参数
+    overridePublisher: no
+    maxReaders: 10
+    sdpFile: ""
+    readUser: ""
+    readPass: ""
+    readIPs: []
+    
+    # RTSP参数
+    rtspTransport: tcp
+    rtspAnyPort: no
+    rtspRangeType: ""
+    rtspRangeStart: ""
+    rtspRangeEnd: ""
+    
+    # 视频参数
+    videoTrack: auto
+    audioTrack: auto
+    videoCodec: ""
+    audioCodec: ""
+    videoBitrate: 0
+    audioBitrate: 0
+    
+    # 推流参数
+    publishUser: ""
+    publishPass: ""
+    publishIPs: []
+    readBufferSize: 0
+    writeBufferSize: 0
