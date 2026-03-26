@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import time
 import yaml
 import glob
 import cv2
@@ -657,6 +658,7 @@ class PipePredictor(object):
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             if frame_id > self.warmup_frame:
                 self.pipe_timer.total_time.start()
+                frame_start_time = time.time()  # 记录帧开始处理时间
 
             if self.modebase["idbased"] or self.modebase["skeletonbased"]:
                 if frame_id > self.warmup_frame:
@@ -718,6 +720,13 @@ class PipePredictor(object):
                     if frame_id > self.warmup_frame:
                         self.pipe_timer.img_num += 1
                         self.pipe_timer.total_time.end()
+                        # 计算并打印当前帧处理时间（没有检测到对象的情况）
+                        frame_end_time = time.time()
+                        frame_process_time = (frame_end_time - frame_start_time) * 1000  # 转换为毫秒
+                        if frame_id % 5 == 0:  # 每5帧打印一次，避免输出太频繁
+                            print(f"Frame {frame_id}: No objects detected, Total processing time = {frame_process_time:.2f}ms")
+                            # 打印各模块详细时间
+                            self.pipe_timer.print_frame_time(frame_id)
                     if self.cfg['visual']:
                         _, _, fps = self.pipe_timer.get_total_time()
                         im = self.visualize_video(frame, mot_res, frame_id, fps,
@@ -889,6 +898,13 @@ class PipePredictor(object):
             if frame_id > self.warmup_frame:
                 self.pipe_timer.img_num += 1
                 self.pipe_timer.total_time.end()
+                # 计算并打印当前帧处理时间
+                frame_end_time = time.time()
+                frame_process_time = (frame_end_time - frame_start_time) * 1000  # 转换为毫秒
+                if frame_id % 5 == 0:  # 每5帧打印一次，避免输出太频繁
+                    print(f"Frame {frame_id}: Total processing time = {frame_process_time:.2f}ms")
+                    # 打印各模块详细时间
+                    self.pipe_timer.print_frame_time(frame_id)
             frame_id += 1
 
             if self.cfg['visual']:

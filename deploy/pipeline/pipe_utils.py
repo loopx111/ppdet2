@@ -49,6 +49,12 @@ class Times(object):
 
     def value(self):
         return round(self.time, 4)
+    
+    def last_duration(self):
+        """获取最后一次调用的持续时间"""
+        if self.st > 0 and self.et > 0:
+            return round(self.et - self.st, 4)
+        return 0
 
 
 class PipeTimer(Times):
@@ -122,6 +128,15 @@ class PipeTimer(Times):
 
         dic['img_num'] = self.img_num
         return dic
+    
+    def print_frame_time(self, frame_id):
+        """打印当前帧各模块处理时间"""
+        print(f"--- Frame {frame_id} Module Times ---")
+        for module_name, timer in self.module_time.items():
+            last_duration = timer.last_duration()
+            if last_duration > 0:
+                print(f"  {module_name}: {last_duration*1000:.2f}ms")
+        print("-------------------------------")
 
 class PushStream(object):
     def __init__(self, pushurl = "rtsp://127.0.0.1:8554/"):
