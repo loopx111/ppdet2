@@ -34,7 +34,7 @@ class DetectionGUI:
         # 初始化变量
         self.running = False
         self.current_scene = "人物检测"
-        self.rtsp_url = "rtsp://admin:cecell123@192.168.1.64:554/Streaming/Channels/102"
+        self.rtsp_url = "rtsp://admin:cecell123@192.168.3.64:554/Streaming/Channels/102"
         self.detection_process = None
         self.frame_queue = queue.Queue(maxsize=10)
         self.results_queue = queue.Queue()
@@ -49,6 +49,13 @@ class DetectionGUI:
         self.result_update_interval = 2.0  # 最小更新间隔（秒）
         self.last_result_update_time = time.time()
         self.pending_results = []  # 待处理的结果
+        
+        # 检测框绘制开关 - 初始为关闭，后期逐步添加功能
+        self.draw_detection_boxes = False  # True: 绘制检测框, False: 不绘制
+        
+        # 检测框相关变量
+        self.last_tracking_boxes = None  # 存储最新的检测框信息
+        self.tracking_boxes_dict = {}  # 按帧号存储检测框信息，用于时间戳同步
         
         # 配置文件映射
         self.scene_configs = {
@@ -158,9 +165,13 @@ class DetectionGUI:
         self.test_btn = ttk.Button(control_frame, text="测试原始视频", command=self.start_raw_video_test)
         self.test_btn.grid(row=0, column=6, padx=(0, 10))
         
+        # 检测框绘制开关按钮
+        self.toggle_boxes_btn = ttk.Button(control_frame, text="开启检测框", command=self.toggle_detection_boxes)
+        self.toggle_boxes_btn.grid(row=0, column=7, padx=(0, 10))
+        
         # 性能显示
         self.fps_label = ttk.Label(control_frame, text="FPS: 0")
-        self.fps_label.grid(row=0, column=7, padx=(0, 10))
+        self.fps_label.grid(row=0, column=8, padx=(0, 10))
         
         # 主显示区域 - 2列布局（已删除日志列）
         # 第1列：视频显示
@@ -228,6 +239,16 @@ class DetectionGUI:
             time.sleep(1)
             self.start_detection()
     
+    def toggle_detection_boxes(self):
+        """切换检测框绘制开关"""
+        self.draw_detection_boxes = not self.draw_detection_boxes
+        if self.draw_detection_boxes:
+            self.toggle_boxes_btn.config(text="关闭检测框")
+            print(f"[DEBUG] 检测框绘制已开启")
+        else:
+            self.toggle_boxes_btn.config(text="开启检测框")
+            print(f"[DEBUG] 检测框绘制已关闭")
+    
     def start_detection(self):
         """启动检测"""
         self.rtsp_url = self.url_var.get().strip()
@@ -242,6 +263,10 @@ class DetectionGUI:
         
         # 清空队列
         self.clear_queues()
+        
+        # 清空检测框信息
+        self.last_tracking_boxes = None
+        self.tracking_boxes_dict = {}
         
         # 启动视频读取线程
         self.video_thread = threading.Thread(target=self.video_reader, daemon=True)
@@ -270,6 +295,10 @@ class DetectionGUI:
         # 清空队列
         self.clear_queues()
         
+        # 清空检测框信息
+        self.last_tracking_boxes = None
+        self.tracking_boxes_dict = {}
+        
         # 启动视频读取线程
         self.video_thread = threading.Thread(target=self.video_reader, daemon=True)
         self.video_thread.start()
@@ -292,6 +321,10 @@ class DetectionGUI:
         # 等待视频线程结束
         if self.video_thread and self.video_thread.is_alive():
             self.video_thread.join(timeout=2)
+        
+        # 清空检测框信息
+        self.last_tracking_boxes = None
+        self.tracking_boxes_dict = {}
         
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
@@ -391,9 +424,16 @@ class DetectionGUI:
                 if grab_latency > 100:  # 超过100ms记录
                     print(f"[DEBUG] 抓取延迟: {grab_latency:.0f}ms")
                 
-                # 放入队列（非阻塞）
+                # 记录帧抓取时间戳（毫秒）
+                frame_capture_timestamp = int(grab_start * 1000)
+                
+                # 将帧和时间戳一起放入队列
                 if not self.frame_queue.full():
-                    self.frame_queue.put(frame, block=False)
+                    self.frame_queue.put({
+                        'frame': frame,
+                        'capture_timestamp': frame_capture_timestamp,
+                        'grab_latency': grab_latency
+                    }, block=False)
                 else:
                     # 队列满时丢弃帧并记录日志
                     queue_size = self.frame_queue.qsize()
@@ -616,8 +656,12 @@ class DetectionGUI:
             if result:
                 self.results_history.append(result)
                 
+                # 如果是检测框结果，立即处理
+                if result['type'] == 'tracking_boxes':
+                    self.add_result_to_list(result)
+                
                 # 如果是trackid结果，累积处理
-                if result['type'] == 'object_count':
+                elif result['type'] == 'object_count':
                     current_time = time.time()
                     current_count = result.get('count', '0')
                     current_frame_id = result.get('frame_id', 0)
@@ -672,6 +716,10 @@ class DetectionGUI:
         # 示例解析逻辑，根据实际输出格式调整
         import re
         
+        # 获取当前时间戳（日志打印时间）
+        current_log_time_ms = int(time.time() * 1000)
+        current_log_time_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        
         # 解析Frame处理时间信息
         if "Frame" in line and "Total processing time" in line:
             match = re.search(r'Frame\s+(\d+):.*=\s+([\d.]+)ms', line)
@@ -682,7 +730,7 @@ class DetectionGUI:
                     "type": "processing_time",
                     "frame": frame_num,
                     "time": time_str,
-                    "timestamp": datetime.now().strftime("%H:%M:%S")
+                    "timestamp": current_log_time_str
                 }
         
         # 解析trackid number信息
@@ -704,12 +752,12 @@ class DetectionGUI:
                     fps = getattr(self, 'fps', 10.0)
                     frame_id = int((current_time - start_time) * fps)
                 
-                print(f"[DEBUG] 解析到trackid number: {num}, 帧号: {frame_id}")
+                print(f"[{current_log_time_str}] [DEBUG] 解析到trackid number: {num}, 帧号: {frame_id}")
                 return {
                     "type": "object_count",
                     "count": num,
                     "frame_id": frame_id,
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "timestamp": current_log_time_str,
                     "scene": self.current_scene
                 }
             else:
@@ -724,16 +772,179 @@ class DetectionGUI:
                     fps = getattr(self, 'fps', 10.0)
                     frame_id = int((current_time - start_time) * fps)
                     
-                    print(f"[DEBUG] 简单解析到trackid number: {num}, 估算帧号: {frame_id}")
+                    print(f"[{current_log_time_str}] [DEBUG] 简单解析到trackid number: {num}, 估算帧号: {frame_id}")
                     return {
                         "type": "object_count",
                     "count": num,
                         "frame_id": frame_id,
-                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "timestamp": current_log_time_str,
                         "scene": self.current_scene
                     }
         
+        # 解析检测框信息 - 简单版，只解析数据，不做时间戳同步
+        elif line.startswith("TRACKING_BOXES:"):
+            # 即使检测框绘制已关闭，也解析数据，但减少日志输出
+            if not self.draw_detection_boxes:
+                # 减少日志频率，避免干扰
+                import random
+                if random.random() < 0.01:  # 1%的概率记录日志
+                    print(f"[{current_log_time_str}] [DEBUG] 检测框绘制已关闭，但仍解析TRACKING_BOXES数据")
+            
+            # 新格式: TRACKING_BOXES: frame_id:frame_capture_timestamp:grab_delay:processing_delay:id:class:score:xmin:ymin:xmax:ymax,id:class:score:xmin:ymin:xmax:ymax,...
+            try:
+                # 直接提取数据部分
+                data_start = line.find("TRACKING_BOXES:") + len("TRACKING_BOXES:")
+                boxes_data = line[data_start:].strip()
+                
+                # 分割帧号、抓取时间戳、抓取延迟、处理延迟和检测框数据
+                parts = boxes_data.split(":", 4)  # 最多分割成5部分
+                if len(parts) < 5:
+                    print(f"[{current_log_time_str}] [DEBUG] TRACKING_BOXES格式错误，少于5部分: {boxes_data}")
+                    return None
+                    
+                frame_id = int(parts[0])
+                frame_capture_timestamp = int(parts[1])  # 毫秒时间戳（原始帧抓取时间）
+                grab_delay = int(parts[2])  # 抓取延迟（毫秒）
+                processing_delay = int(parts[3])  # 处理延迟（毫秒）
+                boxes_info_str = parts[4]
+                
+                # 解析多个检测框
+                boxes = []
+                if boxes_info_str:
+                    # 直接使用split分割，避免多次字符串操作
+                    box_items = boxes_info_str.split(",")
+                    for box_item in box_items:
+                        if box_item:
+                            box_data = box_item.split(":")
+                            if len(box_data) >= 7:
+                                try:
+                                    box_info = {
+                                        "id": int(box_data[0]),
+                                        "class": int(box_data[1]),
+                                        "score": float(box_data[2]),
+                                        "xmin": int(box_data[3]),
+                                        "ymin": int(box_data[4]),
+                                        "xmax": int(box_data[5]),
+                                        "ymax": int(box_data[6])
+                                    }
+                                    boxes.append(box_info)
+                                except (ValueError, IndexError) as e:
+                                    # 解析失败时跳过，不打印太多日志
+                                    print(f"[{current_log_time_str}] [DEBUG] 检测框解析失败: {box_item}, 错误: {e}")
+                                    pass
+                
+                # 计算从原始帧抓取到当前日志的时间差
+                time_since_capture = current_log_time_ms - frame_capture_timestamp
+                
+                # 只在特定情况下记录详细的时间戳信息
+                if frame_id % 10 == 0:  # 每10帧记录一次
+                    print(f"[{current_log_time_str}] [TIMESTAMP_DETAIL] 解析检测框: 帧 {frame_id}, {len(boxes)}个目标")
+                    print(f"[{current_log_time_str}] [TIMESTAMP_DETAIL]  原始帧抓取时间: {frame_capture_timestamp}")
+                    print(f"[{current_log_time_str}] [TIMESTAMP_DETAIL]  抓取延迟: {grab_delay}ms, 处理延迟: {processing_delay}ms")
+                
+                return {
+                    "type": "tracking_boxes",
+                    "frame_id": frame_id,
+                    "frame_capture_timestamp": frame_capture_timestamp,  # 原始帧抓取时间戳
+                    "grab_delay": grab_delay,
+                    "processing_delay": processing_delay,
+                    "boxes": boxes,
+                    "log_time": current_log_time_ms,  # 记录日志打印时间
+                    "log_time_str": current_log_time_str  # 记录日志打印时间字符串
+                }
+            except Exception as e:
+                # 解析失败时打印错误日志
+                print(f"[{current_log_time_str}] [ERROR] TRACKING_BOXES解析失败: {e}, 行: {line[:100]}")
+                return None
+
         return None
+    
+    def calculate_dynamic_delay_compensation(self, current_time_ms):
+        """
+        计算动态延迟补偿 - 简化版
+        固定返回一个较小的补偿值，避免过度补偿
+        """
+        # 固定返回30ms补偿，这个值足够覆盖大多数传输延迟
+        return 30
+    
+    def find_best_matching_boxes_by_timestamp(self, current_time_ms):
+        """
+        基于原始帧抓取时间戳查找最匹配的检测框信息
+        在当前架构下，GUI和Pipeline各自抓取RTSP流，时间戳无法完全一致
+        使用智能匹配：优先匹配时间戳最接近的帧
+        """
+        if not self.draw_detection_boxes:
+            return []
+        
+        if not self.tracking_boxes_dict:
+            return []
+        
+        # 获取当前视频帧的抓取时间戳（毫秒）
+        video_timestamp = getattr(self, 'current_video_frame_timestamp', 0)
+        
+        if video_timestamp == 0:
+            return []
+        
+        # 由于GUI和Pipeline各自抓取RTSP流，时间戳不会完全一致
+        # 我们需要找到时间戳最接近的检测框
+        best_match = None
+        best_time_diff = float('inf')
+        matched_frame_id = 0
+        
+        for frame_id, box_info in self.tracking_boxes_dict.items():
+            box_timestamp = box_info.get('frame_capture_timestamp', 0)
+            if box_timestamp == 0:
+                continue
+            
+            time_diff = abs(video_timestamp - box_timestamp)
+            
+            # 优先匹配时间差小于100ms的检测框
+            if time_diff < 100 and time_diff < best_time_diff:
+                best_match = box_info
+                best_time_diff = time_diff
+                matched_frame_id = frame_id
+        
+        # 如果找到合适的匹配
+        if best_match:
+            boxes = best_match.get('boxes', [])
+            if boxes:
+                # 记录匹配信息，但减少日志频率
+                if self.frame_count % 30 == 0:
+                    box_timestamp = best_match.get('frame_capture_timestamp', 0)
+                    grab_delay = best_match.get('grab_delay', 0)
+                    processing_delay = best_match.get('processing_delay', 0)
+                    pipeline_total_delay = grab_delay + processing_delay
+                    
+                    # 提供更有用的同步信息，而不是误导性的绝对时间比较
+                    if best_time_diff < 50:  # 同步良好
+                        print(f"[SYNC_GOOD] ✓ 时间戳同步良好: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
+                        print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                    elif best_time_diff < 100:  # 同步可接受
+                        print(f"[SYNC_OK] ~ 时间戳同步可接受: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
+                        print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                    else:  # 同步较差
+                        print(f"[SYNC_WARN] ! 时间戳同步较差: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
+                        
+                        # 诊断RTSP缓冲区问题
+                        if best_time_diff > 1000:  # 超过1秒，很可能是RTSP缓冲区问题
+                            print(f"[RTSP_BUFFER_WARNING] !!! 检测到RTSP缓冲区问题 !!!")
+                            print(f"[RTSP_BUFFER_WARNING]   时间差 {best_time_diff}ms (约{best_time_diff/1000:.1f}秒) 表明:")
+                            print(f"[RTSP_BUFFER_WARNING]   1. Pipeline和GUI的RTSP连接不同步")
+                            print(f"[RTSP_BUFFER_WARNING]   2. 可能有 {best_time_diff/1000:.1f}秒 的RTSP缓冲区差异")
+                            print(f"[RTSP_BUFFER_WARNING]   3. Pipeline抓取的是 {best_time_diff/1000:.1f}秒前的帧")
+                            print(f"[RTSP_BUFFER_WARNING]   解决方案:")
+                            print(f"[RTSP_BUFFER_WARNING]     - 检查RTSP服务器缓存配置")
+                            print(f"[RTSP_BUFFER_WARNING]     - 减少OpenCV的缓冲区大小")
+                            print(f"[RTSP_BUFFER_WARNING]     - 使用低延迟RTSP参数")
+                        else:
+                            print(f"[SYNC_WARN]   系统时间可能不同步，建议检查Pipeline和GUI时间设置")
+                        
+                        print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                
+                return boxes
+        
+        # 没有找到匹配
+        return []
     
     def add_result_to_list(self, result):
         """添加结果到列表 - 优化版，避免频繁更新"""
@@ -760,6 +971,60 @@ class DetectionGUI:
             
             # 更新实时统计（使用现有的统计变量）
             self.root.after(0, lambda c=count: self._update_object_stats(c))
+        
+        elif result['type'] == 'tracking_boxes':
+            # 检测框数据，仅用于绘制，不显示在结果列表中
+            # 即使检测框绘制已关闭也保存数据，以便在开启时立即有数据可用
+            frame_id = result.get('frame_id', 0)
+            frame_capture_timestamp = result.get('frame_capture_timestamp', 0)  # 原始帧抓取时间戳
+            grab_delay = result.get('grab_delay', 0)  # 抓取延迟
+            processing_delay = result.get('processing_delay', 0)  # 处理延迟
+            boxes = result.get('boxes', [])
+            log_time_ms = result.get('log_time', 0)  # 日志打印时间
+            log_time_str = result.get('log_time_str', '')  # 日志打印时间字符串
+            
+            # 保存检测框信息供绘制使用
+            current_local_time_ms = int(time.time() * 1000)
+            
+            # 保存到最新检测框 - 移除误导性的capture_to_gui_delay字段
+            self.last_tracking_boxes = {
+                "frame_id": frame_id,
+                "frame_capture_timestamp": frame_capture_timestamp,  # 原始帧抓取时间戳（毫秒）
+                "grab_delay": grab_delay,  # Pipeline抓取延迟（真实延迟）
+                "processing_delay": processing_delay,  # Pipeline处理延迟（真实延迟）
+                "boxes": boxes,
+                "local_time": current_local_time_ms,  # GUI端接收时间（毫秒）
+                "pipeline_total_delay": grab_delay + processing_delay,  # Pipeline总延迟（抓取+处理）
+                "log_time": log_time_ms,  # 日志打印时间
+                "log_time_str": log_time_str  # 日志打印时间字符串
+            }
+            
+            # 按帧号存储检测框信息，用于同步
+            self.tracking_boxes_dict[frame_id] = {
+                "frame_capture_timestamp": frame_capture_timestamp,  # 原始帧抓取时间戳
+                "grab_delay": grab_delay,  # Pipeline抓取延迟（真实延迟）
+                "processing_delay": processing_delay,  # Pipeline处理延迟（真实延迟）
+                "boxes": boxes,
+                "local_time": current_local_time_ms,  # GUI端接收时间
+                "pipeline_total_delay": grab_delay + processing_delay,  # Pipeline总延迟（抓取+处理）
+                "log_time": log_time_ms,  # 日志打印时间
+                "log_time_str": log_time_str  # 日志打印时间字符串
+            }
+            
+            # 清理旧的检测框信息，避免内存泄漏
+            if len(self.tracking_boxes_dict) > 50:  # 最多保留50帧
+                oldest_frame = min(self.tracking_boxes_dict.keys())
+                del self.tracking_boxes_dict[oldest_frame]
+            
+            # 减少日志频率
+            if frame_id % 10 == 0:  # 每10帧记录一次
+                current_log_time_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                print(f"[{current_log_time_str}] [DEBUG] 保存检测框信息: 帧 {frame_id}, {len(boxes)}个目标")
+                print(f"[{current_log_time_str}] [DEBUG]  原始帧抓取时间: {frame_capture_timestamp} ({datetime.fromtimestamp(frame_capture_timestamp/1000).strftime('%H:%M:%S.%f')[:-3]})")
+                print(f"[{current_log_time_str}] [DEBUG]  抓取延迟: {grab_delay}ms, 处理延迟: {processing_delay}ms, 日志打印时间: {log_time_str}")
+                print(f"[{current_log_time_str}] [DEBUG]  从抓取到GUI延迟: {current_local_time_ms - frame_capture_timestamp}ms")
+                print(f"[{current_log_time_str}] [DEBUG]  第一个检测框详细信息: {boxes[0] if boxes else '无'}")
+                print(f"[{current_log_time_str}] [DEBUG]  tracking_boxes_dict 大小: {len(self.tracking_boxes_dict)}")
     
     def _update_results_text(self, text):
         """在主线程中更新结果文本"""
@@ -796,7 +1061,18 @@ class DetectionGUI:
         try:
             # 从队列获取最新帧（非阻塞，只取一帧）
             try:
-                latest_frame = self.frame_queue.get(timeout=0.01)  # 10ms超时
+                frame_data = self.frame_queue.get(timeout=0.01)  # 10ms超时
+                
+                # 解析帧数据（可能是字典或直接的numpy数组）
+                if isinstance(frame_data, dict):
+                    latest_frame = frame_data.get('frame')
+                    frame_capture_timestamp = frame_data.get('capture_timestamp', 0)
+                    grab_latency = frame_data.get('grab_latency', 0)
+                else:
+                    # 兼容旧格式
+                    latest_frame = frame_data
+                    frame_capture_timestamp = 0
+                    grab_latency = 0
                 
                 # 计算FPS
                 current_time = time.time()
@@ -806,11 +1082,112 @@ class DetectionGUI:
                 if elapsed > 0:
                     self.fps = 0.9 * self.fps + 0.1 * (1 / elapsed)
                 
+                # 基于时间戳的精确同步 - 如果检测框绘制已关闭，跳过时间戳计算
+                if self.draw_detection_boxes:
+                    current_time_ms = int(current_time * 1000)
+                    # 记录当前视频帧的抓取时间戳
+                    self.current_video_frame_timestamp = frame_capture_timestamp
+                else:
+                    current_time_ms = 0  # 设置为0，避免任何基于时间戳的计算
+                    self.current_video_frame_timestamp = 0
+                
                 # 更新FPS显示（在主线程中）
                 self.root.after(0, lambda: self.fps_label.config(text=f"FPS: {int(self.fps)}"))
                 
+                # 根据开关状态决定是否绘制检测框
+                frame_to_display = latest_frame  # 默认使用原始帧
+                
+                # 如果检测框绘制已关闭，记录状态并跳过复杂计算
+                if not self.draw_detection_boxes:
+                    # 减少日志频率
+                    if self.frame_count % 120 == 0:  # 每120帧记录一次
+                        print(f"[DEBUG] 检测框绘制已关闭，当前帧: {self.frame_count}")
+                
+                # 只有在开启检测框绘制时才执行绘制逻辑
+                elif self.draw_detection_boxes:
+                    # 记录检测框绘制已开启（调试用）
+                    if self.frame_count % 60 == 0:
+                        print(f"[DEBUG] 检测框绘制已开启，检查可用检测框数据...")
+                        print(f"[DEBUG] last_tracking_boxes: {self.last_tracking_boxes is not None}")
+                        print(f"[DEBUG] tracking_boxes_dict 大小: {len(self.tracking_boxes_dict)}")
+                    
+                    # 创建副本用于绘制检测框
+                    frame_with_boxes = latest_frame.copy()
+                    
+                    # 使用简化的检测框查找方法
+                    boxes = self.find_best_matching_boxes_by_timestamp(current_time_ms)
+                    
+                    # 绘制检测框
+                    if boxes:
+                        # 记录绘制开始时间
+                        draw_start_time = time.time()
+                        draw_start_time_ms = int(draw_start_time * 1000)
+                        draw_start_time_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        
+                        print(f"[DEBUG] 准备绘制 {len(boxes)} 个检测框，开始时间: {draw_start_time_str}")
+                        
+                        for i, box in enumerate(boxes):
+                            xmin = box.get('xmin', 0)
+                            ymin = box.get('ymin', 0)
+                            xmax = box.get('xmax', 0)
+                            ymax = box.get('ymax', 0)
+                            score = box.get('score', 0.0)
+                            class_id = box.get('class', 0)
+                            
+                            # 绘制矩形框
+                            color = (0, 255, 0)  # 绿色
+                            thickness = 2
+                            cv2.rectangle(frame_with_boxes, (xmin, ymin), (xmax, ymax), color, thickness)
+                            
+                            # 添加标签（简化版，只显示ID）
+                            label = f"ID: {box.get('id', 0)}"
+                            font = cv2.FONT_HERSHEY_SIMPLEX
+                            font_scale = 0.5
+                            font_thickness = 1
+                            
+                            # 计算标签大小
+                            label_size = cv2.getTextSize(label, font, font_scale, font_thickness)[0]
+                            label_x = xmin
+                            label_y = ymin - 10 if ymin - 10 > 10 else ymin + 10
+                            
+                            # 绘制标签背景
+                            cv2.rectangle(frame_with_boxes, 
+                                         (label_x, label_y - label_size[1] - 5),
+                                         (label_x + label_size[0], label_y + 5),
+                                         color, -1)
+                            
+                            # 绘制标签文本
+                            cv2.putText(frame_with_boxes, label, 
+                                       (label_x, label_y), 
+                                       font, font_scale, (0, 0, 0), font_thickness)
+                        
+                        # 记录绘制结束时间
+                        draw_end_time = time.time()
+                        draw_end_time_ms = int(draw_end_time * 1000)
+                        draw_end_time_str = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        
+                        # 计算绘制耗时
+                        draw_duration_ms = (draw_end_time - draw_start_time) * 1000
+                        
+                        # 只在绘制耗时异常时记录日志
+                        if draw_duration_ms > 50:  # 超过50ms认为是异常情况
+                            print(f"[DRAW_SLOW] 检测框绘制耗时过长: {draw_duration_ms:.1f}ms, 框数: {len(boxes)}")
+                        
+                        # 简单记录关键匹配信息
+                        if self.last_tracking_boxes and self.frame_count % 30 == 0:
+                            frame_capture_timestamp = self.last_tracking_boxes.get('frame_capture_timestamp', 0)
+                            video_timestamp = getattr(self, 'current_video_frame_timestamp', 0)
+                            if video_timestamp > 0 and frame_capture_timestamp > 0:
+                                time_diff = abs(video_timestamp - frame_capture_timestamp)
+                                print(f"[SYNC_INFO] 时间戳同步: 视频帧={video_timestamp}, 检测框={frame_capture_timestamp}, 差={time_diff}ms")
+                        
+                        frame_to_display = frame_with_boxes
+                    else:
+                        if self.frame_count % 30 == 0:
+                            print(f"[DEBUG] 未找到可用的检测框数据")
+                
                 # 转换为RGB
-                frame_rgb = cv2.cvtColor(latest_frame, cv2.COLOR_BGR2RGB)
+                frame_rgb = cv2.cvtColor(frame_to_display, cv2.COLOR_BGR2RGB)
                 
                 # 转换为PIL图像
                 pil_image = Image.fromarray(frame_rgb)
@@ -845,6 +1222,10 @@ class DetectionGUI:
                 
                 if frames_cleared > 0:
                     print(f"[WARN] 清除了 {frames_cleared} 积压帧，当前队列: {queue_size} (可能检测处理速度跟不上视频流)")
+            
+            # 定期计算延迟统计
+            if self.frame_count % 30 == 0:  # 每30帧计算一次
+                self._calculate_and_display_latency_stats()
             
         except Exception as e:
             print(f"[ERROR] 更新视频显示失败: {e}")
@@ -995,11 +1376,93 @@ class DetectionGUI:
     # toggle_log_pause, toggle_video_filter, toggle_pipeline_filter方法已移除
     # 所有日志现在都输出到终端，不再需要GUI日志过滤功能
     
+    def _calculate_and_display_latency_stats(self):
+        """计算并显示延迟统计信息 - 修复版：只计算Pipeline内部真实延迟"""
+        try:
+            # 如果检测框绘制已关闭，跳过复杂的延迟统计计算
+            if not self.draw_detection_boxes:
+                if self.frame_count % 120 == 0:  # 减少日志频率
+                    print(f"[DEBUG] 检测框绘制已关闭，延迟统计计算已完全跳过")
+                return
+            
+            # 收集最近的检测框信息
+            if not self.tracking_boxes_dict:
+                return
+            
+            # 提取真实的Pipeline内部延迟信息
+            grab_delays = []  # 抓取延迟（Pipeline内部）
+            processing_delays = []  # 处理延迟（Pipeline内部）
+            pipeline_total_delays = []  # Pipeline总延迟（grab_delay + processing_delay）
+            time_sync_diffs = []  # GUI与Pipeline时间戳同步差异
+            
+            for frame_id, box_info in self.tracking_boxes_dict.items():
+                grab_delay = box_info.get('grab_delay', 0)
+                processing_delay = box_info.get('processing_delay', 0)
+                frame_capture_timestamp = box_info.get('frame_capture_timestamp', 0)
+                local_time = box_info.get('local_time', 0)
+                
+                # Pipeline内部真实延迟
+                if grab_delay > 0:
+                    grab_delays.append(grab_delay)
+                if processing_delay > 0:
+                    processing_delays.append(processing_delay)
+                
+                # Pipeline总延迟
+                if grab_delay > 0 or processing_delay > 0:
+                    pipeline_total_delay = grab_delay + processing_delay
+                    pipeline_total_delays.append(pipeline_total_delay)
+                
+                # 时间戳同步差异（仅用于诊断，不用于真实延迟）
+                if (frame_capture_timestamp > 0 and local_time > 0 and 
+                    hasattr(self, 'current_video_frame_timestamp') and 
+                    self.current_video_frame_timestamp > 0):
+                    # 计算Pipeline时间戳与GUI时间戳的差异
+                    time_sync_diff = abs(self.current_video_frame_timestamp - frame_capture_timestamp)
+                    time_sync_diffs.append(time_sync_diff)
+            
+            # 计算统计信息 - 只显示真实的Pipeline内部延迟
+            if grab_delays:
+                avg_grab_delay = sum(grab_delays) / len(grab_delays)
+                max_grab_delay = max(grab_delays)
+                min_grab_delay = min(grab_delays)
+                
+                if self.frame_count % 60 == 0:
+                    print(f"[PIPELINE_STATS] Pipeline抓取延迟: 平均={avg_grab_delay:.0f}ms, "
+                          f"最小={min_grab_delay}ms, 最大={max_grab_delay}ms")
+            
+            if processing_delays:
+                avg_processing_delay = sum(processing_delays) / len(processing_delays)
+                max_processing_delay = max(processing_delays)
+                min_processing_delay = min(processing_delays)
+                
+                if self.frame_count % 60 == 0:
+                    print(f"[PIPELINE_STATS] Pipeline处理延迟: 平均={avg_processing_delay:.0f}ms, "
+                          f"最小={min_processing_delay}ms, 最大={max_processing_delay}ms")
+            
+            if pipeline_total_delays:
+                avg_total_delay = sum(pipeline_total_delays) / len(pipeline_total_delays)
+                max_total_delay = max(pipeline_total_delays)
+                min_total_delay = min(pipeline_total_delays)
+                
+                if self.frame_count % 60 == 0:
+                    print(f"[PIPELINE_STATS] Pipeline总延迟: 平均={avg_total_delay:.0f}ms, "
+                          f"最小={min_total_delay}ms, 最大={max_total_delay}ms")
+            
+            # 时间戳同步诊断（仅用于调试）
+            if time_sync_diffs and self.frame_count % 120 == 0:
+                avg_sync_diff = sum(time_sync_diffs) / len(time_sync_diffs)
+                max_sync_diff = max(time_sync_diffs)
+                min_sync_diff = min(time_sync_diffs)
+                
+                if avg_sync_diff > 500:  # 如果平均同步差异超过500ms，显示警告
+                    print(f"[SYNC_WARNING] 系统时间同步差异: 平均={avg_sync_diff:.0f}ms, "
+                          f"最小={min_sync_diff}ms, 最大={max_sync_diff}ms")
+                    print(f"[SYNC_WARNING] 提示: Pipeline和GUI系统时间可能不同步，这会影响时间戳匹配精度")
+                    
+        except Exception as e:
+            # 静默处理错误，不打印错误日志
+            pass
 
-        # 日志过滤相关代码已移除，所有日志现在都输出到终端
-        
-
-    
     def on_closing(self):
         """关闭窗口事件"""
         self.stop_detection()

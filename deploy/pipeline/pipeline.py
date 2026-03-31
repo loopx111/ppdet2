@@ -22,6 +22,10 @@ import math
 import paddle
 import sys
 import copy
+import subprocess
+import threading
+import queue
+import select
 from collections import defaultdict
 from collections.abc import Sequence
 from datacollector import DataCollector, Result
@@ -572,19 +576,274 @@ class PipePredictor(object):
 
             if self.cfg['visual']:
                 self.visualize_image(batch_file, batch_input, self.pipeline_res)
-
+    
+    class LowLatencyFFmpegReader:
+        """低延迟FFmpeg视频读取器，用于替代OpenCV VideoCapture"""
+        def __init__(self, rtsp_url, width=0, height=0, fps=30):
+            self.rtsp_url = rtsp_url
+            self.fps = fps
+            
+            # 设置分辨率
+            if width == 0 or height == 0:
+                self.width = 640
+                self.height = 360
+                print(f"[FFMPEG] 使用默认分辨率: {self.width}x{self.height}")
+            else:
+                self.width = width
+                self.height = height
+                print(f"[FFMPEG] 使用指定分辨率: {self.width}x{self.height}")
+            
+            # 计算帧大小 (BGR24格式: 3字节/像素)
+            self.frame_size = self.width * self.height * 3
+            print(f"[FFMPEG] 每帧大小: {self.frame_size} 字节")
+            
+            # 状态变量
+            self.running = False
+            self.process = None
+            self.frame_queue = queue.Queue(maxsize=10)  # 稍大的队列
+            self.reader_thread = None
+            
+        def start(self):
+            """启动视频读取"""
+            if self.running:
+                return
+                
+            self.running = True
+            
+            # 启动ffmpeg进程 - 使用与GUI相同的低延迟参数
+            self._start_ffmpeg()
+            
+            # 等待ffmpeg初始化
+            time.sleep(0.5)
+            
+            # 启动读取线程
+            self.reader_thread = threading.Thread(target=self._read_frames, daemon=True)
+            self.reader_thread.start()
+            
+            print(f"[FFMPEG] 低延迟RTSP阅读器已启动: {self.rtsp_url}")
+            
+        def stop(self):
+            """停止视频读取"""
+            self.running = False
+            
+            if self.process and self.process.poll() is None:
+                self.process.terminate()
+                self.process.wait(timeout=2)
+                
+            if self.reader_thread:
+                self.reader_thread.join(timeout=2)
+                
+            print("[FFMPEG] RTSP阅读器已停止")
+            
+        def _start_ffmpeg(self):
+            """启动ffmpeg进程 - 使用GUI的成功参数"""
+            # 使用GUI的成功参数（包含那三个参数），但分辨率改为640x360
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-rtsp_transport', 'tcp',  # 使用TCP传输
+                '-fflags', 'nobuffer',  # 无缓冲区
+                '-flags', 'low_delay',  # 低延迟模式
+                '-avioflags', 'direct',  # 直接I/O
+                '-buffer_size', '102400',  # 缓冲区大小
+                '-i', self.rtsp_url,  # 输入URL
+                '-f', 'rawvideo',  # 输出原始视频
+                '-pix_fmt', 'bgr24',  # 像素格式
+                '-s', '640x360',  # 输出分辨率（改为实际流分辨率）
+                '-an',  # 禁用音频
+                '-threads', '1',  # 单线程处理
+                'pipe:1'  # 输出到标准输出
+            ]
+            
+            print(f"[FFMPEG] ffmpeg命令: {' '.join(ffmpeg_cmd)}")
+            
+            try:
+                self.process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,     # 改为PIPE以便调试
+                    stdin=subprocess.DEVNULL,   # 关闭stdin，避免干扰
+                    bufsize=10**8,              # 100MB缓冲区（GUI使用的成功设置）
+                    universal_newlines=False,
+                    close_fds=True              # 关闭不必要的文件描述符
+                )
+                print("[FFMPEG] ffmpeg进程已启动 (使用GUI参数+640x360)")
+                
+                # 启动一个线程读取stderr，避免管道堵塞
+                def read_stderr():
+                    while self.running and self.process.poll() is None:
+                        line = self.process.stderr.readline()
+                        if line:
+                            print(f"[FFMPEG-STDERR] {line.decode('utf-8', errors='ignore').strip()}")
+                
+                threading.Thread(target=read_stderr, daemon=True).start()
+                
+            except Exception as e:
+                print(f"[FFMPEG-ERROR] 无法启动ffmpeg: {e}")
+                raise
+                
+        def _read_frames(self):
+            """读取帧的线程函数 - 使用GUI的成功模式"""
+            print("[FFMPEG] 读取线程启动")
+            
+            frame_count = 0
+            total_bytes = 0
+            start_time = time.time()
+            
+            print(f"[FFMPEG-DEBUG] 读取循环开始: frame_size={self.frame_size}, running={self.running}, process={self.process}, poll={self.process.poll() if self.process else 'None'}")
+            
+            # 增加初始等待时间，确保FFmpeg已经准备好输出数据
+            time.sleep(0.5)
+            
+            loop_count = 0
+            while self.running and self.process and self.process.poll() is None:
+                loop_count += 1
+                if loop_count == 1:
+                    print(f"[FFMPEG-DEBUG] 进入读取循环，循环计数: {loop_count}")
+                try:
+                    # 读取一帧数据（模仿GUI的成功模式）
+                    grab_start = time.time()
+                    raw_frame = b''
+                    bytes_read = 0
+                    
+                    # 分块读取，防止阻塞（关键：小块读取，直到凑够一帧）
+                    read_attempts = 0  # 读取尝试次数
+                    while bytes_read < self.frame_size and self.running:
+                        # 每次最多读取4096字节（GUI使用的成功模式）
+                        chunk = self.process.stdout.read(min(4096, self.frame_size - bytes_read))
+                        read_attempts += 1
+                        
+                        if not chunk:
+                            # 没有数据了，可能流结束了或进程出错了
+                            if read_attempts <= 10:  # 前10次尝试打印日志
+                                print(f"[FFMPEG-DEBUG] 读取尝试{read_attempts}: 未读到数据，进程状态: poll={self.process.poll()}, running={self.running}")
+                            if self.running:
+                                time.sleep(0.001)  # 短暂等待
+                            continue
+                        
+                        raw_frame += chunk
+                        bytes_read += len(chunk)
+                        total_bytes += len(chunk)
+                        
+                        # 成功读取到数据时打印（前几次）
+                        if frame_count < 3 and read_attempts < 5:
+                            print(f"[FFMPEG-DEBUG] 读取尝试{read_attempts}: 成功读取 {len(chunk)} 字节，累计 {bytes_read}/{self.frame_size}")
+                    
+                    grab_end = time.time()
+                    
+                    # 检查是否读取到完整的一帧
+                    if bytes_read != self.frame_size:
+                        if frame_count == 0:
+                            # 第1帧就读取失败，说明有严重问题
+                            print(f"[FFMPEG-ERROR] 第1帧数据不完整: {bytes_read}/{self.frame_size} 字节")
+                            print(f"[FFMPEG-ERROR] 进程状态: poll={self.process.poll()}, pid={self.process.pid}")
+                            print(f"[FFMPEG-ERROR] 读取尝试次数: {read_attempts}")
+                            # 尝试读取stderr看看有没有错误信息
+                            try:
+                                # 注意：我们已将stderr重定向到DEVNULL，所以这里无法读取
+                                print("[FFMPEG-ERROR] stderr已重定向到DEVNULL，无法读取错误信息")
+                            except:
+                                pass
+                        continue
+                    
+                    # 成功读取一帧
+                    frame_count += 1
+                    
+                    # 每10帧打印一次统计信息
+                    if frame_count % 10 == 0:
+                        elapsed = time.time() - start_time
+                        print(f"[FFMPEG-INFO] 已读取 {frame_count} 帧, {total_bytes/1024/1024:.1f} MB, "
+                              f"平均帧率: {frame_count/elapsed:.1f} fps")
+                    
+                    # 转换为numpy数组
+                    frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape(
+                        (self.height, self.width, 3))
+                    
+                    # 放入队列（非阻塞）
+                    try:
+                        self.frame_queue.put({
+                            'frame': frame,
+                            'capture_timestamp': int(grab_end * 1000),
+                            'read_time': (grab_end - grab_start) * 1000
+                        }, block=False)
+                    except queue.Full:
+                        # 队列已满，跳过此帧
+                        if frame_count % 30 == 0:  # 每30帧打印一次，避免刷屏
+                            print(f"[FFMPEG-WARN] 帧队列已满，跳过一帧 (队列大小: {self.frame_queue.qsize()})")
+                        continue
+                        
+                except Exception as e:
+                    print(f"[FFMPEG-ERROR] 读取帧失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # 短暂休息后继续
+                    if self.running:
+                        time.sleep(0.1)
+            
+            # 循环结束，打印原因
+            print(f"[FFMPEG-DEBUG] 读取循环退出: running={self.running}, process={self.process}, "
+                  f"poll={self.process.poll() if self.process else 'None'}, loop_count={loop_count}")
+            
+            elapsed = time.time() - start_time
+            print(f"[FFMPEG] 读取线程结束, 总共读取 {frame_count} 帧, {total_bytes/1024/1024:.1f} MB, "
+                  f"平均帧率: {frame_count/elapsed:.1f} fps")
+                        
+        def read(self, timeout=0.1):
+            """读取一帧图像，返回(ret, frame, timestamp)格式"""
+            try:
+                frame_data = self.frame_queue.get(timeout=timeout)
+                return True, frame_data['frame'], frame_data['capture_timestamp']
+            except queue.Empty:
+                return False, None, 0
+                
+        def get_queue_size(self):
+            """获取队列大小"""
+            return self.frame_queue.qsize()
+    
     def predict_video(self, video_file, thread_idx=0):
         # mot
         # mot -> attr
         # mot -> pose -> action
-        capture = cv2.VideoCapture(video_file)
-
-        # Get Video info : resolution, fps, frame count
-        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(capture.get(cv2.CAP_PROP_FPS))
-        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-        print("video fps: %d, frame_count: %d" % (fps, frame_count))
+        
+        # 判断是否是RTSP流
+        is_rtsp = "rtsp://" in video_file if isinstance(video_file, str) else any("rtsp://" in url for url in video_file)
+        
+        if is_rtsp:
+            print(f"[FFMPEG] 检测到RTSP流，使用低延迟FFmpeg读取器: {video_file}")
+            
+            # 对于RTSP流，我们使用FFmpeg低延迟读取器
+            # 根据实际流信息使用正确的参数
+            width, height = 640, 360  # 实际分辨率
+            fps = 10  # 实际帧率
+            
+            # 创建FFmpeg读取器
+            ffmpeg_reader = self.LowLatencyFFmpegReader(
+                rtsp_url=video_file if isinstance(video_file, str) else video_file[0],
+                width=width,
+                height=height,
+                fps=fps
+            )
+            print(f"[FFMPEG] 使用实际参数: {width}x{height}, {fps}fps")
+            
+            # 启动读取器
+            ffmpeg_reader.start()
+            
+            # 等待几帧以确保读取器正常工作
+            time.sleep(1.0)
+            
+            capture = None  # 不使用OpenCV
+            print("video fps: %d, resolution: %dx%d" % (fps, width, height))
+        else:
+            # 对于本地视频文件，仍然使用OpenCV
+            capture = cv2.VideoCapture(video_file)
+            
+            # Get Video info : resolution, fps, frame count
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = int(capture.get(cv2.CAP_PROP_FPS))
+            frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+            ffmpeg_reader = None
+            print("video fps: %d, frame_count: %d" % (fps, frame_count))
 
         if len(self.pushurl) > 0:
             video_out_name = 'output' if self.file_name is None else self.file_name
@@ -652,9 +911,55 @@ class PipePredictor(object):
             if frame_id % 10 == 0:
                 print('Thread: {}; frame id: {}'.format(thread_idx, frame_id))
 
-            ret, frame = capture.read()
-            if not ret:
-                break
+            # 记录帧抓取开始时间
+            grab_start = time.time()
+            
+            # 根据输入类型选择读取方式
+            if is_rtsp:
+                # 使用FFmpeg读取器
+                # 增加超时时间，给FFmpeg更多时间完成初始化和第一次读取
+                ret, frame, frame_capture_timestamp = ffmpeg_reader.read(timeout=3.0)
+                if not ret:
+                    # 增加重连计数器
+                    if not hasattr(self, 'reconnect_count'):
+                        self.reconnect_count = 0
+                    
+                    self.reconnect_count += 1
+                    
+                    # 前几次失败不重连，只是继续尝试（可能是初始化需要时间）
+                    if self.reconnect_count <= 3:
+                        print(f"[FFMPEG-WARN] 读取超时或失败 ({self.reconnect_count}次), 继续尝试...")
+                        time.sleep(0.5)  # 短暂等待后重试
+                        continue
+                    
+                    # 超过3次后才进行重连
+                    # 计算重连延迟（指数退避）
+                    reconnect_delay = min(2 ** min(self.reconnect_count - 3, 5), 10)  # 最大10秒
+                    
+                    print(f"[FFMPEG-WARN] 多次读取失败 ({self.reconnect_count}次), 等待{reconnect_delay}秒后重新连接")
+                    
+                    # 重新启动读取器
+                    ffmpeg_reader.stop()
+                    time.sleep(reconnect_delay)
+                    ffmpeg_reader.start()
+                    
+                    time.sleep(1.0)  # 等待读取器稳定
+                    continue
+                    
+                # FFmpeg读取器已经返回了精确的抓取时间戳
+                # 计算实际抓取延迟
+                actual_grab_delay = int((time.time() - (frame_capture_timestamp / 1000)) * 1000)
+                if frame_id % 30 == 0:
+                    print(f"[FFMPEG-INFO] 帧 {frame_id}: 抓取延迟={actual_grab_delay}ms, 队列大小={ffmpeg_reader.get_queue_size()}")
+            else:
+                # 使用OpenCV读取
+                ret, frame = capture.read()
+                if not ret:
+                    break
+                
+                # 记录帧抓取的精确时间戳（毫秒）- 关键：在抓取后立即记录
+                frame_capture_timestamp = int(grab_start * 1000)
+            
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             if frame_id > self.warmup_frame:
                 self.pipe_timer.total_time.start()
@@ -682,6 +987,27 @@ class PipePredictor(object):
                 if frame_id % 10 == 0:
                     print("Thread: {}; trackid number: {}".format(
                         thread_idx, len(mot_res['boxes'])))
+
+                # 输出检测框信息供GUI使用 - 添加精确时间戳和抓取延迟
+                current_timestamp = int(time.time() * 1000)
+                # 计算从抓取帧到当前时间的延迟
+                grab_delay = int((time.time() - grab_start) * 1000)
+                # 计算实际处理延迟（从抓取完成到输出结果）
+                # 注意：总延迟 = grab_delay + processing_delay
+                processing_delay = current_timestamp - frame_capture_timestamp - grab_delay
+                # 确保processing_delay不为负数
+                if processing_delay < 0:
+                    processing_delay = 0
+                
+                boxes_info = []
+                for box in mot_res['boxes']:
+                    # box格式: [id, class, score, xmin, ymin, xmax, ymax]
+                    box_info = f"{int(box[0])}:{int(box[1])}:{box[2]:.2f}:{int(box[3])}:{int(box[4])}:{int(box[5])}:{int(box[6])}"
+                    boxes_info.append(box_info)
+                
+                boxes_str = ",".join(boxes_info) if boxes_info else ""
+                # 新格式：帧号:抓取时间戳:抓取延迟:处理延迟:检测框数据
+                print(f"TRACKING_BOXES: {frame_id}:{frame_capture_timestamp}:{grab_delay}:{processing_delay}:{boxes_str}")
 
                 # flow_statistic only support single class MOT
                 boxes, scores, ids = res[0]  # batch size = 1 in MOT
@@ -716,6 +1042,15 @@ class PipePredictor(object):
 
                 # nothing detected
                 if len(mot_res['boxes']) == 0:
+                    # 即使没有检测到对象，也输出TRACKING_BOXES信息（空的）
+                    # 使用与有检测框时相同的格式：frame_id:frame_capture_timestamp:grab_delay:processing_delay:
+                    current_timestamp = int(time.time() * 1000)
+                    grab_delay = int((time.time() - grab_start) * 1000)
+                    processing_delay = current_timestamp - frame_capture_timestamp - grab_delay
+                    if processing_delay < 0:
+                        processing_delay = 0
+                    print(f"TRACKING_BOXES: {frame_id}:{frame_capture_timestamp}:{grab_delay}:{processing_delay}:")
+                    
                     frame_id += 1
                     if frame_id > self.warmup_frame:
                         self.pipe_timer.img_num += 1
@@ -926,6 +1261,14 @@ class PipePredictor(object):
         if self.cfg['visual'] and len(self.pushurl)==0:
             writer.release()
             print('save result to {}'.format(out_path))
+        
+        # 清理资源
+        if not is_rtsp and capture:
+            capture.release()
+            print("OpenCV VideoCapture已释放")
+        elif is_rtsp and ffmpeg_reader:
+            ffmpeg_reader.stop()
+            print("FFmpeg读取器已停止")
 
     def visualize_video(self,
                         image,
