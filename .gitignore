@@ -27,6 +27,9 @@ __pycache__/
 /output/
 /inference_model/
 /output_inference/
+
+# GUI output directory
+deploy/pipeline/output/
 /parts/
 /sdist/
 /var/

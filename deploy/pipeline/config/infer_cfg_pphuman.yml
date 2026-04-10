@@ -1,4 +1,4 @@
-crop_thresh: 0.5
+crop_thresh: 0.8
 attr_thresh: 0.5
 kpt_thresh: 0.2
 visual: True

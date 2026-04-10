@@ -8,7 +8,7 @@ type: OCSORTTracker # choose one tracker in ['JDETracker', 'OCSORTTracker']
 # BYTETracker
 JDETracker:
   use_byte: True
-  det_thresh: 0.3
+  det_thresh: 0.5
   conf_thres: 0.6
   low_conf_thres: 0.1
   match_thres: 0.9

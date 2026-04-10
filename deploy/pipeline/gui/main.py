@@ -179,7 +179,7 @@ class DetectionGUI:
         video_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         
         # 视频显示画布
-        self.video_canvas = tk.Canvas(video_frame, width=640, height=480, bg="black")
+        self.video_canvas = tk.Canvas(video_frame, width=640, height=360, bg="black")
         self.video_canvas.grid(row=0, column=0)
         
         # 第2列：信息面板（扩展宽度，占用了原来的日志列空间）
@@ -335,6 +335,7 @@ class DetectionGUI:
         print(f"[DEBUG] 使用ffmpeg管道方式获取RTSP流: {self.rtsp_url}")
         
         # 构建ffmpeg命令（类似ffplay的低延迟参数）
+        # 使用与pipeline.py中一致的分辨率(640x360)以提高兼容性
         ffmpeg_cmd = [
             'ffmpeg',
             '-rtsp_transport', 'tcp',  # 使用TCP传输
@@ -345,8 +346,8 @@ class DetectionGUI:
             '-i', self.rtsp_url,  # 输入URL
             '-f', 'rawvideo',  # 输出原始视频
             '-pix_fmt', 'bgr24',  # 像素格式
-            # 不强制指定输出帧率，使用原始帧率
-            '-s', '640x480',  # 输出分辨率
+            # 使用与pipeline.py一致的分辨率(640x360)
+            '-s', '640x360',  # 输出分辨率
             '-an',  # 禁用音频
             '-threads', '1',  # 单线程处理
             'pipe:1'  # 输出到标准输出
@@ -377,7 +378,7 @@ class DetectionGUI:
             stderr_thread.start()
             
             frame_width = 640
-            frame_height = 480
+            frame_height = 360
             frame_size = frame_width * frame_height * 3  # 3 channels for bgr24
             
             frame_count = 0
@@ -505,7 +506,7 @@ class DetectionGUI:
                 continue
             
             # 调整大小（降低分辨率以减少处理延迟）
-            frame = cv2.resize(frame, (640, 480))
+            frame = cv2.resize(frame, (640, 360))
             
             # 放入队列（非阻塞）
             if not self.frame_queue.full():
@@ -917,11 +918,13 @@ class DetectionGUI:
                     
                     # 提供更有用的同步信息，而不是误导性的绝对时间比较
                     if best_time_diff < 50:  # 同步良好
-                        print(f"[SYNC_GOOD] ✓ 时间戳同步良好: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
-                        print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                        # print(f"[SYNC_GOOD] ✓ 时间戳同步良好: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
+                        # print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                        pass
                     elif best_time_diff < 100:  # 同步可接受
-                        print(f"[SYNC_OK] ~ 时间戳同步可接受: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
-                        print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                        # print(f"[SYNC_OK] ~ 时间戳同步可接受: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
+                        # print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                        pass
                     else:  # 同步较差
                         print(f"[SYNC_WARN] ! 时间戳同步较差: 视频帧与检测框时间差={best_time_diff}ms (帧 {matched_frame_id})")
                         
@@ -939,7 +942,7 @@ class DetectionGUI:
                         else:
                             print(f"[SYNC_WARN]   系统时间可能不同步，建议检查Pipeline和GUI时间设置")
                         
-                        print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
+                        # print(f"[SYNC_INFO]   Pipeline处理延迟: {pipeline_total_delay}ms (抓取:{grab_delay}ms + 处理:{processing_delay}ms)")
                 
                 return boxes
         
@@ -1139,27 +1142,48 @@ class DetectionGUI:
                             thickness = 2
                             cv2.rectangle(frame_with_boxes, (xmin, ymin), (xmax, ymax), color, thickness)
                             
-                            # 添加标签（简化版，只显示ID）
+                            # 添加标签（显示ID和置信度）
                             label = f"ID: {box.get('id', 0)}"
                             font = cv2.FONT_HERSHEY_SIMPLEX
                             font_scale = 0.5
                             font_thickness = 1
                             
-                            # 计算标签大小
+                            # 计算ID标签大小
                             label_size = cv2.getTextSize(label, font, font_scale, font_thickness)[0]
                             label_x = xmin
                             label_y = ymin - 10 if ymin - 10 > 10 else ymin + 10
                             
-                            # 绘制标签背景
+                            # 绘制ID标签背景
                             cv2.rectangle(frame_with_boxes, 
                                          (label_x, label_y - label_size[1] - 5),
                                          (label_x + label_size[0], label_y + 5),
                                          color, -1)
                             
-                            # 绘制标签文本
+                            # 绘制ID标签文本
                             cv2.putText(frame_with_boxes, label, 
                                        (label_x, label_y), 
                                        font, font_scale, (0, 0, 0), font_thickness)
+                            
+                            # 添加置信度标签（在ID标签下方）
+                            score_label = f"{score:.2f}"
+                            score_font_scale = 0.4
+                            score_font_thickness = 1
+                            
+                            # 计算置信度标签大小
+                            score_label_size = cv2.getTextSize(score_label, font, score_font_scale, score_font_thickness)[0]
+                            score_label_x = xmin
+                            score_label_y = label_y + label_size[1] + 5
+                            
+                            # 绘制置信度标签背景
+                            cv2.rectangle(frame_with_boxes,
+                                         (score_label_x, score_label_y - score_label_size[1] - 3),
+                                         (score_label_x + score_label_size[0], score_label_y + 3),
+                                         (255, 0, 0), -1)  # 使用红色背景
+                            
+                            # 绘制置信度标签文本
+                            cv2.putText(frame_with_boxes, score_label,
+                                       (score_label_x, score_label_y),
+                                       font, score_font_scale, (255, 255, 255), score_font_thickness)
                         
                         # 记录绘制结束时间
                         draw_end_time = time.time()
@@ -1179,7 +1203,7 @@ class DetectionGUI:
                             video_timestamp = getattr(self, 'current_video_frame_timestamp', 0)
                             if video_timestamp > 0 and frame_capture_timestamp > 0:
                                 time_diff = abs(video_timestamp - frame_capture_timestamp)
-                                print(f"[SYNC_INFO] 时间戳同步: 视频帧={video_timestamp}, 检测框={frame_capture_timestamp}, 差={time_diff}ms")
+                                # print(f"[SYNC_INFO] 时间戳同步: 视频帧={video_timestamp}, 检测框={frame_capture_timestamp}, 差={time_diff}ms")
                         
                         frame_to_display = frame_with_boxes
                     else:
@@ -1427,8 +1451,9 @@ class DetectionGUI:
                 min_grab_delay = min(grab_delays)
                 
                 if self.frame_count % 60 == 0:
-                    print(f"[PIPELINE_STATS] Pipeline抓取延迟: 平均={avg_grab_delay:.0f}ms, "
-                          f"最小={min_grab_delay}ms, 最大={max_grab_delay}ms")
+                    # print(f"[PIPELINE_STATS] Pipeline抓取延迟: 平均={avg_grab_delay:.0f}ms, "
+                    #       f"最小={min_grab_delay}ms, 最大={max_grab_delay}ms")
+                    pass
             
             if processing_delays:
                 avg_processing_delay = sum(processing_delays) / len(processing_delays)
@@ -1436,8 +1461,9 @@ class DetectionGUI:
                 min_processing_delay = min(processing_delays)
                 
                 if self.frame_count % 60 == 0:
-                    print(f"[PIPELINE_STATS] Pipeline处理延迟: 平均={avg_processing_delay:.0f}ms, "
-                          f"最小={min_processing_delay}ms, 最大={max_processing_delay}ms")
+                    # print(f"[PIPELINE_STATS] Pipeline处理延迟: 平均={avg_processing_delay:.0f}ms, "
+                    #       f"最小={min_processing_delay}ms, 最大={max_processing_delay}ms")
+                    pass
             
             if pipeline_total_delays:
                 avg_total_delay = sum(pipeline_total_delays) / len(pipeline_total_delays)
@@ -1445,8 +1471,9 @@ class DetectionGUI:
                 min_total_delay = min(pipeline_total_delays)
                 
                 if self.frame_count % 60 == 0:
-                    print(f"[PIPELINE_STATS] Pipeline总延迟: 平均={avg_total_delay:.0f}ms, "
-                          f"最小={min_total_delay}ms, 最大={max_total_delay}ms")
+                    # print(f"[PIPELINE_STATS] Pipeline总延迟: 平均={avg_total_delay:.0f}ms, "
+                    #       f"最小={min_total_delay}ms, 最大={max_total_delay}ms")
+                    pass
             
             # 时间戳同步诊断（仅用于调试）
             if time_sync_diffs and self.frame_count % 120 == 0:
@@ -1455,9 +1482,10 @@ class DetectionGUI:
                 min_sync_diff = min(time_sync_diffs)
                 
                 if avg_sync_diff > 500:  # 如果平均同步差异超过500ms，显示警告
-                    print(f"[SYNC_WARNING] 系统时间同步差异: 平均={avg_sync_diff:.0f}ms, "
-                          f"最小={min_sync_diff}ms, 最大={max_sync_diff}ms")
-                    print(f"[SYNC_WARNING] 提示: Pipeline和GUI系统时间可能不同步，这会影响时间戳匹配精度")
+                    # print(f"[SYNC_WARNING] 系统时间同步差异: 平均={avg_sync_diff:.0f}ms, "
+                    #       f"最小={min_sync_diff}ms, 最大={max_sync_diff}ms")
+                    # print(f"[SYNC_WARNING] 提示: Pipeline和GUI系统时间可能不同步，这会影响时间戳匹配精度")
+                    pass
                     
         except Exception as e:
             # 静默处理错误，不打印错误日志
