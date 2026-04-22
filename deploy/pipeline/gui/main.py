@@ -336,6 +336,7 @@ class DetectionGUI:
         
         # 构建ffmpeg命令（类似ffplay的低延迟参数）
         # 使用与pipeline.py中一致的分辨率(640x360)以提高兼容性
+        # CPU解码模式（GPU解码会导致延迟增加）
         ffmpeg_cmd = [
             'ffmpeg',
             '-rtsp_transport', 'tcp',  # 使用TCP传输
@@ -346,7 +347,6 @@ class DetectionGUI:
             '-i', self.rtsp_url,  # 输入URL
             '-f', 'rawvideo',  # 输出原始视频
             '-pix_fmt', 'bgr24',  # 像素格式
-            # 使用与pipeline.py一致的分辨率(640x360)
             '-s', '640x360',  # 输出分辨率
             '-an',  # 禁用音频
             '-threads', '1',  # 单线程处理

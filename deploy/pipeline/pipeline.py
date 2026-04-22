@@ -638,6 +638,7 @@ class PipePredictor(object):
         def _start_ffmpeg(self):
             """启动ffmpeg进程 - 使用GUI的成功参数"""
             # 使用GUI的成功参数（包含那三个参数），但分辨率改为640x360
+            # CPU解码模式（GPU解码会导致延迟增加）
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-rtsp_transport', 'tcp',  # 使用TCP传输
@@ -648,7 +649,7 @@ class PipePredictor(object):
                 '-i', self.rtsp_url,  # 输入URL
                 '-f', 'rawvideo',  # 输出原始视频
                 '-pix_fmt', 'bgr24',  # 像素格式
-                '-s', '640x360',  # 输出分辨率（改为实际流分辨率）
+                '-s', '640x360',  # 输出分辨率
                 '-an',  # 禁用音频
                 '-threads', '1',  # 单线程处理
                 'pipe:1'  # 输出到标准输出
