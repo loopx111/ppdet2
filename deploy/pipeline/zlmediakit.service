@@ -1,0 +1,14 @@
+[Unit]
+Description=ZLMediaKit Media Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/MediaServer -c /usr/local/ZLMediaKit/config.ini
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/zlmediakit.log
+StandardError=append:/var/log/zlmediakit.log
+
+[Install]
+WantedBy=multi-user.target

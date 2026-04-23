@@ -131,7 +131,10 @@ class SDE_Detector(Detector):
                 self.region_polygon
             ) > 6, 'region_type is custom, region_polygon should be at least 3 pairs of point coords.'
 
-        assert batch_size == 1, "MOT model only supports batch_size=1."
+        # 移除 batch_size=1 限制，支持多路视频流批处理
+        # assert batch_size == 1, "MOT model only supports batch_size=1."
+        if batch_size > 1:
+            print(f"[SDE_Detector] WARNING: batch_size={batch_size} > 1 is experimental, tracking is still per-frame")
         self.det_times = Timer(with_tracker=True)
         self.num_classes = len(self.pred_config.labels)
         if self.skip_frame_num > 1:

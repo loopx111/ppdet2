@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PaddleDetection 行为分析平台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        
+        /* 头部 */
+        .header {
+            background: #16213e;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #0f3460;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            color: #00d9ff;
+        }
+        
+        .header-info {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        
+        .status-badge {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-online {
+            background: #00c853;
+            color: #fff;
+        }
+        
+        .status-offline {
+            background: #f44336;
+            color: #fff;
+        }
+        
+        /* 主体布局 */
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            padding: 20px;
+            min-height: calc(100vh - 70px);
+        }
+        
+        /* 视频区域 */
+        .video-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .video-container {
+            background: #16213e;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .video-header {
+            padding: 15px 20px;
+            background: #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .video-header h2 {
+            font-size: 16px;
+            color: #00d9ff;
+        }
+        
+        .video-info {
+            display: flex;
+            gap: 15px;
+            font-size: 14px;
+        }
+        
+        .video-info span {
+            padding: 3px 10px;
+            background: #16213e;
+            border-radius: 5px;
+        }
+        
+        .video-wrapper {
+            position: relative;
+            background: #000;
+            aspect-ratio: 16/9;
+        }
+        
+        .video-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        .video-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #666;
+        }
+        
+        .video-placeholder svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+        }
+        
+        /* 控制按钮 */
+        .controls {
+            display: flex;
+            gap: 10px;
+            padding: 15px 20px;
+            background: #16213e;
+        }
+        
+        .btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: #00d9ff;
+            color: #000;
+        }
+        
+        .btn-primary:hover {
+            background: #00b8d4;
+        }
+        
+        .btn-secondary {
+            background: #0f3460;
+            color: #fff;
+        }
+        
+        .btn-secondary:hover {
+            background: #1a4a7a;
+        }
+        
+        .btn-danger {
+            background: #f44336;
+            color: #fff;
+        }
+        
+        .btn-danger:hover {
+            background: #d32f2f;
+        }
+        
+        /* 统计卡片 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }
+        
+        .stat-card {
+            background: #16213e;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        
+        .stat-card .icon {
+            font-size: 30px;
+            margin-bottom: 10px;
+        }
+        
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #00d9ff;
+        }
+        
+        .stat-card .label {
+            font-size: 14px;
+            color: #888;
+            margin-top: 5px;
+        }
+        
+        /* 告警侧边栏 */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .panel {
+            background: #16213e;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .panel-header {
+            padding: 15px 20px;
+            background: #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .panel-header h3 {
+            font-size: 16px;
+            color: #fff;
+        }
+        
+        .panel-header .badge {
+            background: #f44336;
+            color: #fff;
+            padding: 2px 10px;
+            border-radius: 10px;
+            font-size: 12px;
+        }
+        
+        .panel-content {
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        /* 告警列表 */
+        .alert-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #0f3460;
+            border-radius: 8px;
+            border-left: 4px solid #00d9ff;
+        }
+        
+        .alert-item.warning {
+            border-left-color: #ff9800;
+        }
+        
+        .alert-item.alert {
+            border-left-color: #f44336;
+        }
+        
+        .alert-item.critical {
+            border-left-color: #e91e63;
+            background: #2a1040;
+        }
+        
+        .alert-item .time {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        
+        .alert-item .message {
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .alert-item .camera {
+            font-size: 12px;
+            color: #00d9ff;
+        }
+        
+        .alert-item.acknowledged {
+            opacity: 0.5;
+        }
+        
+        .alert-item.acknowledged::after {
+            content: '✓';
+            float: right;
+            color: #00c853;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        /* 规则面板 */
+        .rule-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #0f3460;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .rule-info {
+            flex: 1;
+        }
+        
+        .rule-info .name {
+            font-size: 14px;
+            margin-bottom: 3px;
+        }
+        
+        .rule-info .detail {
+            font-size: 12px;
+            color: #888;
+        }
+        
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #333;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .toggle-slider {
+            background: #00c853;
+        }
+        
+        input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+        
+        /* 实时通知 */
+        .notification {
+            position: fixed;
+            top: 100px;
+            right: 20px;
+            background: #16213e;
+            padding: 15px 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+            border-left: 4px solid #00d9ff;
+            transform: translateX(400px);
+            transition: transform 0.3s;
+            max-width: 350px;
+            z-index: 1000;
+        }
+        
+        .notification.show {
+            transform: translateX(0);
+        }
+        
+        .notification.warning {
+            border-left-color: #ff9800;
+        }
+        
+        .notification.alert {
+            border-left-color: #f44336;
+        }
+        
+        .notification .title {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .notification .message {
+            font-size: 14px;
+            color: #aaa;
+        }
+        
+        /* 响应式 */
+        @media (max-width: 1024px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>PaddleDetection 行为分析平台</h1>
+        <div class="header-info">
+            <span id="wsStatus" class="status-badge status-offline">WebSocket: 未连接</span>
+            <span id="detectorStatus" class="status-badge status-offline">检测器: 未就绪</span>
+        </div>
+    </div>
+    
+    <div class="main-container">
+        <div class="video-section">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="icon">👥</div>
+                    <div class="value" id="personCount">0</div>
+                    <div class="label">当前人数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="icon">⚡</div>
+                    <div class="value" id="fpsValue">0</div>
+                    <div class="label">帧率 FPS</div>
+                </div>
+                <div class="stat-card">
+                    <div class="icon">🚨</div>
+                    <div class="value" id="alertCount">0</div>
+                    <div class="label">告警总数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="icon">📊</div>
+                    <div class="value" id="totalFrames">0</div>
+                    <div class="label">处理帧数</div>
+                </div>
+            </div>
+            
+            <div class="video-container">
+                <div class="video-header">
+                    <h2>实时监控 - 摄像头1</h2>
+                    <div class="video-info">
+                        <span id="streamStatus">● 加载中...</span>
+                        <span id="resolution">640x360</span>
+                    </div>
+                </div>
+                <div class="video-wrapper">
+                    <img id="videoStream" src="/detection/cam1" alt="视频流" onerror="handleStreamError()">
+                </div>
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="takeSnapshot()">📷 截图</button>
+                    <button class="btn btn-secondary" onclick="clearAlerts()">🗑️ 清空告警</button>
+                    <button class="btn btn-secondary" onclick="refreshPage()">🔄 刷新页面</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="sidebar">
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>实时告警</h3>
+                    <span class="badge" id="newAlertCount">0</span>
+                </div>
+                <div class="panel-content" id="alertList">
+                    <div class="empty-state">
+                        <p>暂无告警记录</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>告警规则</h3>
+                </div>
+                <div class="panel-content" id="ruleList">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 通知弹窗 -->
+    <div id="notification" class="notification">
+        <div class="title"></div>
+        <div class="message"></div>
+    </div>
+    
+    <script>
+        // 全局状态
+        let ws = null;
+        let personCount = 0;
+        let fps = 0;
+        let frameCount = 0;
+        let alerts = [];
+        let rules = [];
+        let streamConnected = false;
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initWebSocket();
+            loadAlertRules();
+            loadAlerts();
+            checkHealth();
+            
+            // 每30秒检查健康状态
+            setInterval(checkHealth, 30000);
+        });
+        
+        // WebSocket 连接
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                document.getElementById('wsStatus').textContent = 'WebSocket: 已连接';
+                document.getElementById('wsStatus').className = 'status-badge status-online';
+                console.log('WebSocket 已连接');
+                
+                // 定期发送心跳
+                setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'ping' }));
+                    }
+                }, 30000);
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleMessage(data);
+                } catch (e) {
+                    console.error('消息解析失败:', e);
+                }
+            };
+            
+            ws.onclose = () => {
+                document.getElementById('wsStatus').textContent = 'WebSocket: 断开';
+                document.getElementById('wsStatus').className = 'status-badge status-offline';
+                console.log('WebSocket 已断开，3秒后重连...');
+                setTimeout(initWebSocket, 3000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket 错误:', error);
+            };
+        }
+        
+        // 处理 WebSocket 消息
+        function handleMessage(data) {
+            if (data.type === 'detection') {
+                // 更新检测信息
+                const info = data.data;
+                personCount = info.person_count;
+                fps = info.fps;
+                frameCount = info.frame_id;
+                
+                document.getElementById('personCount').textContent = personCount;
+                document.getElementById('fpsValue').textContent = fps;
+                document.getElementById('totalFrames').textContent = frameCount;
+                
+                if (!streamConnected) {
+                    streamConnected = true;
+                    document.getElementById('streamStatus').textContent = '● 已连接';
+                    document.getElementById('streamStatus').style.color = '#00c853';
+                }
+                
+            } else if (data.type === 'alert') {
+                // 添加告警
+                addAlert(data.data);
+            }
+        }
+        
+        // 添加告警到列表
+        function addAlert(alert) {
+            alerts.unshift(alert);
+            
+            // 限制显示数量
+            if (alerts.length > 50) {
+                alerts.pop();
+            }
+            
+            updateAlertList();
+            updateAlertCounts();
+            showNotification(alert);
+        }
+        
+        // 更新告警列表
+        function updateAlertList() {
+            const container = document.getElementById('alertList');
+            
+            if (alerts.length === 0) {
+                container.innerHTML = '<div class="empty-state"><p>暂无告警记录</p></div>';
+                return;
+            }
+            
+            container.innerHTML = alerts.map(alert => {
+                const time = new Date(alert.timestamp * 1000).toLocaleTimeString();
+                const levelClass = alert.level;
+                const ackClass = alert.acknowledged ? 'acknowledged' : '';
+                
+                return `
+                    <div class="alert-item ${levelClass} ${ackClass}" data-id="${alert.id}">
+                        <div class="time">${time}</div>
+                        <div class="message">${alert.message}</div>
+                        <div class="camera">${alert.camera_id}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // 更新告警计数
+        function updateAlertCounts() {
+            const unackCount = alerts.filter(a => !a.acknowledged).length;
+            document.getElementById('alertCount').textContent = alerts.length;
+            document.getElementById('newAlertCount').textContent = unackCount;
+            document.getElementById('newAlertCount').style.display = unackCount > 0 ? 'inline' : 'none';
+        }
+        
+        // 显示通知
+        function showNotification(alert) {
+            const notification = document.getElementById('notification');
+            notification.querySelector('.title').textContent = alert.event_type;
+            notification.querySelector('.message').textContent = alert.message;
+            notification.className = `notification ${alert.level}`;
+            
+            notification.classList.add('show');
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 5000);
+        }
+        
+        // 加载告警规则
+        async function loadAlertRules() {
+            try {
+                const response = await fetch('/api/rules');
+                const data = await response.json();
+                rules = data.rules || [];
+                updateRuleList();
+            } catch (e) {
+                console.error('加载规则失败:', e);
+            }
+        }
+        
+        // 更新规则列表
+        function updateRuleList() {
+            const container = document.getElementById('ruleList');
+            const eventNames = {
+                'person_detected': '检测到人员',
+                'person_count_change': '人员变化',
+                'fight_detected': '打架检测',
+                'fall_detected': '摔倒检测'
+            };
+            
+            container.innerHTML = rules.map(rule => `
+                <div class="rule-item">
+                    <div class="rule-info">
+                        <div class="name">${eventNames[rule.event_type] || rule.event_type}</div>
+                        <div class="detail">${rule.camera_id} | ${rule.level}</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" ${rule.enabled ? 'checked' : ''} 
+                               onchange="toggleRule('${rule.id}', this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            `).join('');
+        }
+        
+        // 切换规则
+        async function toggleRule(ruleId, enabled) {
+            try {
+                const rule = rules.find(r => r.id === ruleId);
+                if (!rule) return;
+                
+                await fetch(`/api/rules/${ruleId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...rule, enabled })
+                });
+                
+                rule.enabled = enabled;
+            } catch (e) {
+                console.error('更新规则失败:', e);
+            }
+        }
+        
+        // 加载告警历史
+        async function loadAlerts() {
+            try {
+                const response = await fetch('/api/alerts?limit=50');
+                const data = await response.json();
+                alerts = data.alerts || [];
+                updateAlertList();
+                updateAlertCounts();
+            } catch (e) {
+                console.error('加载告警失败:', e);
+            }
+        }
+        
+        // 检查健康状态
+        async function checkHealth() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                if (data.detector_initialized) {
+                    document.getElementById('detectorStatus').textContent = '检测器: 已就绪';
+                    document.getElementById('detectorStatus').className = 'status-badge status-online';
+                } else {
+                    document.getElementById('detectorStatus').textContent = '检测器: 初始化中';
+                    document.getElementById('detectorStatus').className = 'status-badge status-offline';
+                }
+            } catch (e) {
+                console.error('健康检查失败:', e);
+            }
+        }
+        
+        // 截图
+        async function takeSnapshot() {
+            try {
+                const response = await fetch('/api/snapshot?camera_id=cam1&event_type=manual');
+                const data = await response.json();
+                
+                if (data.snapshot_path) {
+                    // 打开截图
+                    window.open(data.snapshot_path, '_blank');
+                }
+            } catch (e) {
+                console.error('截图失败:', e);
+                alert('截图失败');
+            }
+        }
+        
+        // 清空告警
+        async function clearAlerts() {
+            if (!confirm('确定要清空所有告警记录吗？')) return;
+            
+            try {
+                await fetch('/api/alerts', { method: 'DELETE' });
+                alerts = [];
+                updateAlertList();
+                updateAlertCounts();
+            } catch (e) {
+                console.error('清空告警失败:', e);
+            }
+        }
+        
+        // 刷新页面
+        function refreshPage() {
+            location.reload();
+        }
+        
+        // 处理视频流错误
+        function handleStreamError() {
+            streamConnected = false;
+            document.getElementById('streamStatus').textContent = '● 连接失败';
+            document.getElementById('streamStatus').style.color = '#f44336';
+            
+            // 尝试重连
+            setTimeout(() => {
+                const img = document.getElementById('videoStream');
+                img.src = '/detection/cam1?' + Date.now();
+            }, 5000);
+        }
+    </script>
+</body>
+</html>

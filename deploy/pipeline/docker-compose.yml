@@ -1,0 +1,63 @@
+# Docker Compose 配置
+# 用于快速部署 ZLMediaKit 和 PaddleDetection API
+
+version: '3.8'
+
+services:
+  # ZLMediaKit 流媒体服务器
+  zlmediakit:
+    image: psamples/zlmediakit:latest
+    container_name: zlmediakit
+    restart: unless-stopped
+    ports:
+      - "554:554/tcp"     # RTSP
+      - "1935:1935/tcp"   # RTMP
+      - "8080:8080/tcp"   # HTTP
+      - "8443:8443/tcp"   # HTTPS
+      - "8000:8000/udp"   # WebRTC UDP
+      - "8000:8000/tcp"   # WebRTC TCP
+      - "8088:8088/tcp"   # WebSocket
+    volumes:
+      - ./zlmediakit/config:/config
+      - ./zlmediakit/logs:/logs
+      - ./zlmediakit/media:/media
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - video-network
+
+  # PaddleDetection API 服务
+  paddledetection-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: paddledetection-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../..:/app
+      - ~/.cache/paddle:/root/.cache/paddle  # 模型缓存
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    depends_on:
+      - zlmediakit
+    networks:
+      - video-network
+
+  # Web 前端 (可选)
+  # web-frontend:
+  #   image: nginx:alpine
+  #   container_name: web-frontend
+  #   ports:
+  #     - "3000:80"
+  #   volumes:
+  #     - ../web:/usr/share/nginx/html
+  #   depends_on:
+  #     - paddledetection-api
+  #   networks:
+  #     - video-network
+
+networks:
+  video-network:
+    driver: bridge

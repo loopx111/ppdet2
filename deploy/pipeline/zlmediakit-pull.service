@@ -1,0 +1,15 @@
+[Unit]
+Description=ZLMediaKit Stream Puller
+After=network.target zlmediakit.service
+Requires=zlmediakit.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/zlmediakit_pull.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/zlmediakit_pull.log
+StandardError=append:/var/log/zlmediakit_pull.log
+
+[Install]
+WantedBy=multi-user.target

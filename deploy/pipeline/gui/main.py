@@ -34,7 +34,8 @@ class DetectionGUI:
         # 初始化变量
         self.running = False
         self.current_scene = "人物检测"
-        self.rtsp_url = "rtsp://admin:cecell123@192.168.3.64:554/Streaming/Channels/102"
+        # 使用ZLMediaKit代理地址，避免直接从摄像头拉流
+        self.rtsp_url = "rtsp://127.0.0.1:554/live/cam1"
         self.detection_process = None
         self.frame_queue = queue.Queue(maxsize=10)
         self.results_queue = queue.Queue()

@@ -854,7 +854,7 @@ def load_predictor(model_dir,
             max_batch_size=batch_size,
             min_subgraph_size=min_subgraph_size,
             precision_mode=precision_map[run_mode],
-            use_static=False,
+            use_static=True,  # 启用静态引擎缓存，重启后直接加载
             use_calib_mode=trt_calib_mode)
 
         if use_dynamic_shape:
